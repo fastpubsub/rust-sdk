@@ -1,0 +1,76 @@
+[package]
+name = "fastpubsub_sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Rust SDK for FastPubSubNetwork (contract v0.1, transport and filters draft)"
+license = "MIT OR Apache-2.0"
+repository = "https://fastpubsub.com/fastpubsub-sdk"
+
+[lib]
+name = "fastpubsub_sdk"
+path = "src/lib.rs"
+
+
+[features]
+# REST/discovery by default. Disable with `default-features = false`.
+default = ["rest","websocket","access_token_json","debug_log_format_json","examples"]
+rest = ["dep:chrono", "dep:reqwest", "dep:serde_json"]
+access_token_json = ["dep:serde_json"]
+debug_log_format_json = ["dep:serde_json"]
+examples = []
+websocket = [
+    "dep:tokio-tungstenite",
+    "dep:tokio-rustls",
+    "dep:rustls-pemfile",
+    "dep:webpki-roots",
+    "dep:base64",
+    "dep:xxhash-rust",
+]
+webtransport = []
+
+[[example]]
+name = "websocket"
+path = "examples/websocket.rs"
+required-features = ["examples", "websocket", "rest"]
+
+[[example]]
+name = "webtransport"
+path = "examples/webtransport.rs"
+required-features = ["examples", "webtransport"]
+
+[[example]]
+name = "latest_receiver"
+path = "examples/latest_receiver.rs"
+required-features = ["examples", "websocket"]
+
+[[example]]
+name = "chat_broadcast"
+path = "examples/chat_broadcast.rs"
+required-features = ["examples", "websocket", "rest"]
+
+[[example]]
+name = "latest_state_sync"
+path = "examples/latest_state_sync.rs"
+required-features = ["examples", "websocket"]
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", optional = true, default-features = false, features = ["clock", "std"] }
+base64 = { version = "0.22", optional = true }
+bytes = "1"
+dashmap = "6"
+flate2 = "1.1.9"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+http = "1"
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["http2", "json", "rustls-tls"] }
+rustls-pemfile = { version = "2.2", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", optional = true }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["logging", "ring", "tls12"] }
+tokio-tungstenite = { version = "0.26", optional = true, features = ["connect", "rustls-tls-webpki-roots"] }
+url = "2"
+webpki-roots = { version = "0.26", optional = true }
+xxhash-rust = { version = "0.8.15", default-features = false, features = ["xxh32"], optional = true }
+chacha20poly1305 = "0.10.1"
+aes-gcm = "0.10.3"

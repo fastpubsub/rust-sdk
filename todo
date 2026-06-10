@@ -1,0 +1,21 @@
+PublishDeliveryMode in binary frame - options.delivery exists in the command, but is not encoded on the wire yet. Perimeter parse_client_message also reads only tenant/channel/payload. Need envelope format on perimeter + SDK.
+
+Token rights - SDK does not check allow_channels_pub/sub. Perimeter answers ERR:permission_denied. `on_websocket_event` returns it as a typed event.
+
+OK:SUB: / OK:UNSUB: - one pattern per line. SDK returns confirmations through `WebSocketEvent`.
+
+Reconnect / backoff - SDK does smooth reconnect through a candidate connection and short overlap dedup.
+
+Backpressure on command mpsc - when it is full, publish/subscribe return NotConnected. There is no separate QueueFull yet.
+
+Several subscriptions for one pattern - key is tenant:pattern. Duplicate gives DuplicateSubscription. One inbound message can go to several queues if several patterns match.
+
+Inbound wire: perimeter sends matched_patterns list (FRAME_TAG_DELIVER). SDK routes to queues by tenant:pattern key, without local matching.
+
+PING/PONG - Ping is answered with Pong. Client does not send text PING.
+
+TLS / real endpoint - overlay_network_endpoint is still a stub: wss://{overlay}.fastpubsub.invalid/ws.
+
+Filters by route policy - now all filters run on every message. Contract needs resolve by tenant + pattern (crypto on private.#, and so on).
+
+WebTransport - still a stub without a task.
