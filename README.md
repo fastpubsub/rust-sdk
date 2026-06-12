@@ -367,19 +367,19 @@ let client = create_web_socket("overlay_name", "AT_token")
 Inbound filters run in registration order. Outbound filters run in reverse
 registration order.
 
-Available filter implementations:
+Available filter implementations are in [`src/filters/`](src/filters/).
 
-| Filter | Source | Purpose |
-|--------|--------|---------|
-| `CompressedFilter` | [`src/filters/compressed.rs`](src/filters/compressed.rs) | Deflate raw compression |
-| `EncryptionFilter` | [`src/filters/encryption.rs`](src/filters/encryption.rs) | Payload encryption |
-| `FragmentFilter` | [`src/filters/fragment.rs`](src/filters/fragment.rs) | Split large payloads and restore missing fragments |
-| `ChannelBatchFilter` | [`src/filters/channel_batch.rs`](src/filters/channel_batch.rs) | Batch small messages on one channel |
-| `Delta16Filter`, `Delta32Filter`, `Delta64Filter` | [`src/filters/delta.rs`](src/filters/delta.rs) | Send snapshots and compact deltas |
-| `BandwidthLimiterFilter` | [`src/filters/bandwidth_limiter.rs`](src/filters/bandwidth_limiter.rs) | Limit outbound bytes per second |
-| `SendRateFilter` | [`src/filters/send_rate.rs`](src/filters/send_rate.rs) | Limit send rate |
-| `DebugLogFilter` | [`src/filters/debug_log.rs`](src/filters/debug_log.rs) | Log filter stages |
-| `DummyFilter` | [`src/filters/dummy.rs`](src/filters/dummy.rs) | Test and demo pass-through filter |
+| Filter | Purpose |
+|--------|---------|
+| `CompressedFilter` | Deflate raw compression |
+| `EncryptionFilter` | Payload encryption |
+| `FragmentFilter` | Split large payloads and restore missing fragments |
+| `ChannelBatchFilter` | Batch small messages on one channel |
+| `Delta16Filter`, `Delta32Filter`, `Delta64Filter` | Send snapshots and compact deltas |
+| `BandwidthLimiterFilter` | Limit outbound bytes per second |
+| `SendRateFilter` | Limit send rate |
+| `DebugLogFilter` | Log filter stages |
+| `DummyFilter` | Test and demo pass-through filter |
 
 Timer-based filters use `filter_timer_mode` on the builder:
 
@@ -488,15 +488,15 @@ By default, TLS trust uses public `webpki` roots plus extra CA files. Use
 
 ## Examples In This Repository
 
-Run from `rust-sdk/`.
+Examples are in [`examples/`](examples/). Run commands from `rust-sdk/`.
 
-| File | Run command | What it shows |
-|------|-------------|---------------|
-| [`examples/websocket.rs`](examples/websocket.rs) | `cargo run --release --features examples --example websocket` | Full session, edge resolve, access token, WebSocket, subscribe, publish, events |
-| [`examples/webtransport.rs`](examples/webtransport.rs) | `cargo run --release --features examples,webtransport --example webtransport` | WebTransport builder path; transport is still a stub |
-| [`examples/chat_broadcast.rs`](examples/chat_broadcast.rs) | `FPS_MASTER_TOKEN=MT_... cargo run --features examples --example chat_broadcast` | Broadcast chat messages to every subscriber matching `public.chat.#` |
-| [`examples/latest_receiver.rs`](examples/latest_receiver.rs) | `FPS_ACCESS_TOKEN=AT_... FPS_WS_ENDPOINT=wss://edge/ws cargo run --features examples --example latest_receiver` | Read only the newest queued message |
-| [`examples/latest_state_sync.rs`](examples/latest_state_sync.rs) | `FPS_ACCESS_TOKEN=AT_... FPS_WS_ENDPOINT=wss://edge/ws cargo run --features examples --example latest_state_sync` | Store latest state values by key |
+| Example | What it shows |
+|---------|---------------|
+| `websocket` | Full session: edge resolve, access token, WebSocket, subscribe, publish, and events |
+| `webtransport` | WebTransport builder path. The transport is still a stub |
+| `chat_broadcast` | Broadcast chat messages to every subscriber matching `public.chat.#` |
+| `latest_receiver` | Read only the newest queued message |
+| `latest_state_sync` | Store latest state values by key |
 
 ## Main Modules
 
@@ -514,6 +514,10 @@ Run from `rust-sdk/`.
 - WebTransport has no real network task yet.
 - Delivery success means local SDK/transport acceptance, not confirmed delivery
   to every remote subscriber.
+
+## Changelog
+
+Release notes are in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 
