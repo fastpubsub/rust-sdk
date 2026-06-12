@@ -40,7 +40,6 @@ still a stub in contract v0.1.
 From the repository root:
 
 ```bash
-cd rust-sdk
 cargo check
 cargo build --release
 ```
@@ -56,9 +55,13 @@ cargo fmt --manifest-path Cargo.toml
 Default features enable REST, WebSocket, access token JSON, and JSON debug log
 formatting.
 
+The official crate is published on crates.io as `fastpubsub-sdk`. The dependency is
+renamed to `fastpubsub_sdk` here so the Rust import path matches the SDK
+examples.
+
 ```toml
 [dependencies]
-fastpubsub_sdk = { path = "../rust-sdk" }
+fastpubsub_sdk = { package = "fastpubsub-sdk", version = "0.1" }
 ```
 
 Transport only, without REST discovery and token helpers:
@@ -66,7 +69,8 @@ Transport only, without REST discovery and token helpers:
 ```toml
 [dependencies]
 fastpubsub_sdk = {
-    path = "../rust-sdk",
+    package = "fastpubsub-sdk",
+    version = "0.1",
     default-features = false,
     features = ["websocket"]
 }
