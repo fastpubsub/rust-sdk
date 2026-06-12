@@ -1,10 +1,15 @@
 [package]
-name = "fastpubsub_sdk"
+name = "fastpubsub"
 version = "0.1.0"
 edition = "2021"
-description = "Rust SDK for FastPubSubNetwork (contract v0.1, transport and filters draft)"
+description = "Rust SDK for FastPubSubNetwork realtime message transport."
 license = "MIT OR Apache-2.0"
-repository = "https://fastpubsub.com/fastpubsub-sdk"
+repository = "https://github.com/fastpubsub/rust-sdk"
+homepage = "https://fastpubsub.com"
+documentation = "https://doc.fastpubsub.com/index.html"
+readme = "README.md"
+keywords = ["pubsub", "realtime", "fanout", "messaging", "gaming"]
+categories = ["network-programming", "asynchronous", "messaging", "gaming" ]
 
 [lib]
 name = "fastpubsub_sdk"
