@@ -9,7 +9,7 @@ homepage = "https://fastpubsub.com"
 documentation = "https://doc.fastpubsub.com/index.html"
 readme = "README.md"
 keywords = ["pubsub", "realtime", "fanout", "messaging", "gaming"]
-categories = ["network-programming", "asynchronous", "messaging", "gaming" ]
+categories = ["network-programming", "asynchronous", "web-programming", "game-development" ]
 
 [lib]
 name = "fastpubsub_sdk"
