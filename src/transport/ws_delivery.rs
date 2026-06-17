@@ -12,7 +12,10 @@ use futures_util::SinkExt;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::filters::{FilterError, FilterRegistration, FilterSendMessage, RouteContext};
+use crate::filters::{
+    with_filter_notice_queue, FilterError, FilterNotice, FilterRegistration, FilterSendMessage,
+    RouteContext,
+};
 use crate::metadata::{MessageMeta, MetaMode, MetaWriter, SdkMessage};
 
 use super::overlap_dedup::OverlapDedup;
@@ -22,8 +25,14 @@ use super::ws_subscriptions::SubscriptionEntry;
 use super::{TransportError, WebSocketError};
 
 pub(super) enum InboundDeliveryResult {
-    Delivered { messages: Vec<FilterSendMessage> },
-    DuplicateDropped { messages: Vec<FilterSendMessage> },
+    Delivered {
+        messages: Vec<FilterSendMessage>,
+        notices: Vec<FilterNotice>,
+    },
+    DuplicateDropped {
+        messages: Vec<FilterSendMessage>,
+        notices: Vec<FilterNotice>,
+    },
 }
 
 pub(super) async fn handle_publish(
@@ -98,8 +107,9 @@ pub(super) async fn handle_inbound_binary(
             }
         })?;
     let messages = result.messages;
+    let notices = result.notices;
     if result.payloads.is_empty() {
-        return Ok(InboundDeliveryResult::Delivered { messages });
+        return Ok(InboundDeliveryResult::Delivered { messages, notices });
     }
 
     let dedup_payload = if result.payloads.len() == 1 {
@@ -108,7 +118,7 @@ pub(super) async fn handle_inbound_binary(
         frame.payload.as_ref()
     };
     if overlap_dedup.is_duplicate(&frame.tenant, &frame.channel, dedup_payload) {
-        return Ok(InboundDeliveryResult::DuplicateDropped { messages });
+        return Ok(InboundDeliveryResult::DuplicateDropped { messages, notices });
     }
 
     let mut delivered_any = false;
@@ -157,7 +167,7 @@ pub(super) async fn handle_inbound_binary(
             channel: frame.channel,
         });
     }
-    Ok(InboundDeliveryResult::Delivered { messages })
+    Ok(InboundDeliveryResult::Delivered { messages, notices })
 }
 
 fn apply_outbound_filters_until(
@@ -191,15 +201,19 @@ fn apply_inbound_filters(
     payload: Vec<u8>,
     meta_mode: MetaMode,
 ) -> Result<InboundPipelineResult, TransportError> {
-    match meta_mode {
+    let (result, notices) = with_filter_notice_queue(|| match meta_mode {
         MetaMode::None => apply_inbound_filters_without_meta(filters, ctx, payload),
         MetaMode::Stages => apply_inbound_filters_with_meta(filters, ctx, payload),
-    }
+    });
+    let mut result = result?;
+    result.notices.extend(notices);
+    Ok(result)
 }
 
 struct InboundPipelineResult {
     payloads: Vec<InboundLocalPayload>,
     messages: Vec<FilterSendMessage>,
+    notices: Vec<FilterNotice>,
 }
 
 struct InboundLocalPayload {
@@ -243,6 +257,7 @@ fn apply_inbound_filters_without_meta(
             })
             .collect(),
         messages,
+        notices: Vec::new(),
     })
 }
 
@@ -286,6 +301,7 @@ fn apply_inbound_filters_with_meta(
             })
             .collect(),
         messages,
+        notices: Vec::new(),
     })
 }
 
@@ -296,7 +312,7 @@ fn filter_err_to_transport(e: FilterError) -> TransportError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::filters::{FilterInboundResult, FilterTrait};
+    use crate::filters::{FilterInboundResult, FilterTrait, LatestOnlyFilter};
     use bytes::{BufMut, BytesMut};
 
     fn push_text(buf: &mut BytesMut, text: &str) {
@@ -680,7 +696,7 @@ mod tests {
 
         assert_eq!(rx.try_recv().unwrap().payload.as_ref(), b"hello");
         match result {
-            InboundDeliveryResult::Delivered { messages } => {
+            InboundDeliveryResult::Delivered { messages, notices } => {
                 assert_eq!(
                     messages,
                     vec![FilterSendMessage::new(
@@ -689,6 +705,7 @@ mod tests {
                         b"ack".to_vec()
                     )]
                 );
+                assert!(notices.is_empty());
             }
             InboundDeliveryResult::DuplicateDropped { .. } => panic!("message must be delivered"),
         }
@@ -710,10 +727,68 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap().payload.as_ref(), b"he");
         assert_eq!(rx.try_recv().unwrap().payload.as_ref(), b"ll");
         match result {
-            InboundDeliveryResult::Delivered { messages } => {
+            InboundDeliveryResult::Delivered { messages, notices } => {
                 assert!(messages.is_empty());
+                assert!(notices.is_empty());
             }
             InboundDeliveryResult::DuplicateDropped { .. } => panic!("message must be delivered"),
+        }
+    }
+
+    #[tokio::test]
+    async fn latest_only_stale_drop_returns_filter_notice() {
+        let subscriptions = DashMap::new();
+        let mut rx = add_subscription(&subscriptions, "t1", "a.#");
+        let sender = LatestOnlyFilter::new(std::time::Duration::from_secs(1));
+        let filters = vec![FilterRegistration::new(
+            "t1",
+            "a.",
+            LatestOnlyFilter::new(std::time::Duration::from_secs(1)),
+        )];
+        let mut dedup = OverlapDedup::new(std::time::Duration::from_secs(2));
+        let ctx = RouteContext {
+            tenant: "t1",
+            channel: "a.b",
+        };
+        let first = sender.apply_outbound(ctx, b"first".to_vec()).unwrap()[0].clone();
+        let second = sender.apply_outbound(ctx, b"second".to_vec()).unwrap()[0].clone();
+
+        let second_frame = deliver_frame("t1", "a.b", &second, &["a.#"]);
+        handle_inbound_binary(
+            &filters,
+            MetaMode::None,
+            &subscriptions,
+            &mut dedup,
+            &second_frame,
+        )
+        .await
+        .unwrap();
+        assert_eq!(rx.try_recv().unwrap().payload.as_ref(), b"second");
+
+        let first_frame = deliver_frame("t1", "a.b", &first, &["a.#"]);
+        let result = handle_inbound_binary(
+            &filters,
+            MetaMode::None,
+            &subscriptions,
+            &mut dedup,
+            &first_frame,
+        )
+        .await
+        .unwrap();
+
+        assert!(rx.try_recv().is_err());
+        match result {
+            InboundDeliveryResult::Delivered { messages, notices } => {
+                assert!(messages.is_empty());
+                assert_eq!(notices.len(), 1);
+                assert_eq!(notices[0].level, crate::filters::FilterNoticeLevel::Warning);
+                assert!(notices[0]
+                    .message
+                    .contains("latest only dropped stale message"));
+            }
+            InboundDeliveryResult::DuplicateDropped { .. } => {
+                panic!("message must not be duplicate")
+            }
         }
     }
 

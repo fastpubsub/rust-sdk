@@ -65,6 +65,13 @@ use tokio::sync::mpsc;
 pub enum WebSocketEvent {
     /// Protocol, network, filter, or local delivery error.
     Error(WebSocketError),
+    /// Filter notice from a filter.
+    FilterNotice {
+        /// Notice level: `info` or `warning`.
+        level: &'static str,
+        /// Notice text.
+        message: String,
+    },
     /// SDK started smooth reconnect and is opening the candidate connection.
     ReconnectStarted,
     /// Candidate connection became active after resubscribe.

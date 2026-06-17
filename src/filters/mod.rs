@@ -14,6 +14,7 @@ mod delta;
 mod dummy;
 mod encryption;
 mod fragment;
+mod latest_only;
 mod send_rate;
 
 pub use bandwidth_limiter::BandwidthLimiterFilter;
@@ -32,8 +33,12 @@ pub use fragment::{
     FragmentFilter, FRAGMENT_DEFAULT_DEFRAG_TIMEOUT_SECS, FRAGMENT_DEFAULT_MAX_FRAGMENT_BYTES,
     FRAGMENT_DEFAULT_REQUEST_INTERVAL_MS, FRAGMENT_DEFAULT_THRESHOLD_BYTES,
 };
+pub use latest_only::{
+    InvalidPrefixPolicy, LatestOnlyFilter, LATEST_ONLY_DEFAULT_RESET_TIMEOUT_SECS,
+};
 pub use send_rate::{SendRateFilter, SendRateLimit};
 
+use std::cell::RefCell;
 use std::fmt;
 use std::time::Duration;
 
@@ -151,6 +156,63 @@ impl FilterSendMessage {
             payload: payload.into(),
         }
     }
+}
+
+/// Filter notice level from a filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterNoticeLevel {
+    /// Informational notice.
+    Info,
+    /// Debug warning.
+    Warning,
+}
+
+/// Filter notice from a filter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilterNotice {
+    /// Notice level.
+    pub level: FilterNoticeLevel,
+    /// Notice text.
+    pub message: String,
+}
+
+impl FilterNotice {
+    /// Creates an informational notice.
+    pub fn info(message: impl Into<String>) -> Self {
+        Self {
+            level: FilterNoticeLevel::Info,
+            message: message.into(),
+        }
+    }
+
+    /// Creates a warning.
+    pub fn warning(message: impl Into<String>) -> Self {
+        Self {
+            level: FilterNoticeLevel::Warning,
+            message: message.into(),
+        }
+    }
+}
+
+thread_local! {
+    static FILTER_NOTICE_QUEUE: RefCell<Option<Vec<FilterNotice>>> = RefCell::new(None);
+}
+
+/// Runs code with the shared filter notice queue.
+pub(crate) fn with_filter_notice_queue<T>(work: impl FnOnce() -> T) -> (T, Vec<FilterNotice>) {
+    let previous = FILTER_NOTICE_QUEUE.with(|queue| queue.replace(Some(Vec::new())));
+    let result = work();
+    let notices = FILTER_NOTICE_QUEUE.with(|queue| queue.replace(previous).unwrap_or_default());
+    (result, notices)
+}
+
+/// Adds a filter notice to the current transport queue.
+pub(crate) fn emit_filter_notice(notice: FilterNotice) {
+    FILTER_NOTICE_QUEUE.with(|queue| {
+        if let Some(notices) = queue.borrow_mut().as_mut() {
+            notices.push(notice);
+        }
+    });
 }
 
 /// Result of one inbound message after filter processing.

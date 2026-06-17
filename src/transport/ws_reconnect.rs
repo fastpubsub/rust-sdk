@@ -294,12 +294,14 @@ impl WsTaskState {
                 )
                 .await
                 {
-                    Ok(InboundDeliveryResult::Delivered { messages }) => {
+                    Ok(InboundDeliveryResult::Delivered { messages, notices }) => {
+                        notify_filter_notices(ctx.events, notices);
                         self.publish_filter_messages(ctx.filters, messages, ctx.events)
                             .await;
                     }
-                    Ok(InboundDeliveryResult::DuplicateDropped { messages }) => {
+                    Ok(InboundDeliveryResult::DuplicateDropped { messages, notices }) => {
                         notify_event(ctx.events, WebSocketEvent::DuplicateDropped);
+                        notify_filter_notices(ctx.events, notices);
                         self.publish_filter_messages(ctx.filters, messages, ctx.events)
                             .await;
                     }
@@ -425,6 +427,25 @@ impl WsTaskState {
 
 fn notify_error(tx: &Option<mpsc::Sender<WebSocketEvent>>, error: WebSocketError) {
     notify_event(tx, WebSocketEvent::Error(error));
+}
+
+fn notify_filter_notices(
+    tx: &Option<mpsc::Sender<WebSocketEvent>>,
+    notices: Vec<crate::filters::FilterNotice>,
+) {
+    for notice in notices {
+        let level = match notice.level {
+            crate::filters::FilterNoticeLevel::Info => "info",
+            crate::filters::FilterNoticeLevel::Warning => "warning",
+        };
+        notify_event(
+            tx,
+            WebSocketEvent::FilterNotice {
+                level,
+                message: notice.message,
+            },
+        );
+    }
 }
 
 fn notify_sub_ack(tx: &Option<mpsc::Sender<WebSocketEvent>>, ack: SubWireAck) {
