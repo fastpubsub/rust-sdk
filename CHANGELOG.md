@@ -4,7 +4,7 @@ All notable changes to `fastpubsub-sdk` are documented in this file.
 
 This project uses semantic versioning for public crate releases.
 
-## 0.1.2 - 2026-06-17
+## 0.2.0 - 2026-06-17
 
 ### Added
 

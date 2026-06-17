@@ -29,7 +29,8 @@ Main tasks:
 - receive SDK messages with tenant, real channel, matched pattern, payload, and
   local metadata;
 - add route filters for compression, encryption, fragmentation, batching,
-  delta encoding, debug logging, send rate control, and bandwidth control;
+  delta encoding, latest-only delivery, debug logging, send rate control, and
+  bandwidth control;
 - use helper types for game loops and latest-state storage.
 
 WebTransport is present as a feature and demo path, but the real network task is
@@ -378,6 +379,7 @@ Available filter implementations are in [`src/filters/`](src/filters/).
 | `Delta16Filter`, `Delta32Filter`, `Delta64Filter` | Send snapshots and compact deltas |
 | `BandwidthLimiterFilter` | Limit outbound bytes per second |
 | `SendRateFilter` | Limit send rate |
+| `LatestOnlyFilter` | Keep only the newest message per client on inbound routes |
 | `DebugLogFilter` | Log filter stages |
 | `DummyFilter` | Test and demo pass-through filter |
 
@@ -401,6 +403,65 @@ let client = create_web_socket("overlay_name", "AT_token")
     )
     .build()
     .await?;
+```
+
+### LatestOnlyFilter
+
+`LatestOnlyFilter` is for routes where only the newest message per client
+should reach subscribers. On outbound publish it adds a `client_id` and monotonic
+counter prefix to the payload. On inbound delivery it keeps the last accepted
+counter per `tenant + channel + client_id` and drops older messages.
+
+Use it for high-frequency streams such as player position or sensor data where
+late packets are useless.
+
+```rust
+use std::time::Duration;
+
+use fastpubsub_sdk::filters::LatestOnlyFilter;
+
+let client = create_web_socket("overlay_name", "AT_token")
+    .endpoint("wss://edge.example/ws")
+    .add_filter(
+        "tenant_1",
+        "player.position.",
+        LatestOnlyFilter::new(Duration::from_secs(60)),
+    )
+    .build()
+    .await?;
+```
+
+Inbound messages without a `LatestOnlyFilter` header follow
+`InvalidPrefixPolicy`:
+
+| Policy | Behavior |
+|--------|----------|
+| `PassThrough` (default) | Pass the payload through unchanged |
+| `Drop` | Drop the message without an error |
+| `ErrorEventAndDrop` | Return a filter error and drop the message |
+
+Change the policy with `with_invalid_prefix_policy`:
+
+```rust
+use fastpubsub_sdk::filters::{InvalidPrefixPolicy, LatestOnlyFilter};
+
+LatestOnlyFilter::with_default_timeout()
+    .with_invalid_prefix_policy(InvalidPrefixPolicy::Drop);
+```
+
+When a stale message is dropped, the filter emits a warning
+`FilterNotice`. Enable `on_websocket_event` on the builder to receive it as
+`WebSocketEvent::FilterNotice`:
+
+```rust
+use fastpubsub_sdk::WebSocketEvent;
+
+match event {
+    WebSocketEvent::FilterNotice { level, message } => {
+        println!("filter {level}: {message}");
+    }
+    _ => {}
+}
 ```
 
 ## Metadata
