@@ -22,7 +22,7 @@ use super::overlap_dedup::OverlapDedup;
 use super::route_pattern::make_route_subscription_key;
 use super::ws_protocol::{decode_deliver_frame, encode_publish_frame};
 use super::ws_subscriptions::SubscriptionEntry;
-use super::{TransportError, WebSocketError};
+use super::{PublishDeliveryMode, PublishOptions, TransportError, WebSocketError};
 
 pub(super) enum InboundDeliveryResult {
     Delivered {
@@ -41,6 +41,7 @@ pub(super) async fn handle_publish(
     tenant: &str,
     channel: &str,
     payload: Bytes,
+    options: &PublishOptions,
 ) -> Result<(), TransportError> {
     handle_publish_until(
         filters,
@@ -49,6 +50,7 @@ pub(super) async fn handle_publish(
         tenant,
         channel,
         payload.to_vec(),
+        options,
     )
     .await
 }
@@ -60,11 +62,12 @@ pub(super) async fn handle_publish_until(
     tenant: &str,
     channel: &str,
     payload: Vec<u8>,
+    options: &PublishOptions,
 ) -> Result<(), TransportError> {
     let ctx = RouteContext { tenant, channel };
     let bodies = apply_outbound_filters_until(filters, end_index, ctx, payload)?;
     for body in bodies {
-        handle_prepared_publish(ws_write, tenant, channel, body).await?;
+        handle_prepared_publish(ws_write, tenant, channel, body, options.delivery).await?;
     }
     Ok(())
 }
@@ -75,8 +78,9 @@ pub(super) async fn handle_prepared_publish(
     tenant: &str,
     channel: &str,
     payload: Vec<u8>,
+    delivery: PublishDeliveryMode,
 ) -> Result<(), TransportError> {
-    let frame = encode_publish_frame(tenant, channel, &payload)
+    let frame = encode_publish_frame(tenant, channel, &payload, delivery)
         .map_err(|e| TransportError::Other(e.into()))?;
     ws_write
         .send(Message::Binary(frame))

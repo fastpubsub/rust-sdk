@@ -27,12 +27,16 @@ pub(crate) mod tls_roots;
 mod api;
 #[cfg(feature = "rest")]
 pub use api::{
-    create_access_token, create_access_token_with_config, expires_at_after_seconds,
-    expires_at_max_ttl, format_expires_at_rfc3339_z, parse_expires_at_input,
+    access_token_id, create_access_token, create_access_token_with_config, expires_at_after_seconds,
+    expires_at_max_ttl, format_expires_at_rfc3339_z, parse_access_token, parse_expires_at_input,
     parse_expires_at_input_clamp, ping, ping_fastest, ping_fastest_with_config, ping_many,
-    ping_many_with_config, ping_with_config, utc_now_with_margin, AccessTokenBuildError,
-    AccessTokenJsonError, ApiError, CreateAccessTokenBuilder, CreateAccessTokenRequest,
-    CreateAccessTokenResponse, ExpiresAtParseError, PingManyResult, PingTiming, TenantGrant,
+    ping_many_with_config, ping_with_config, refresh_access_token, refresh_access_token_from_at,
+    refresh_access_token_from_at_with_config, refresh_access_token_with_config,
+    revoke_access_token, revoke_access_token_with_config, utc_now_with_margin,
+    AccessTokenBuildError, AccessTokenJsonError, AccessTokenParseError, ApiError,
+    CreateAccessTokenBuilder, CreateAccessTokenRequest, CreateAccessTokenResponse,
+    ExpiresAtParseError, PingManyResult, PingTiming, RefreshAccessTokenRequest,
+    RefreshAccessTokenResponse, RevokeAccessTokenRequest, RevokeAccessTokenResponse, TenantGrant,
     TokenRights, DEFAULT_NOW_MARGIN_SECS, MAX_TOKEN_TTL_HOURS, MAX_TOKEN_TTL_MARGIN_SECS,
 };
 
@@ -244,5 +248,15 @@ impl<T: Transport> FastPubSub<T> {
         T: 'static,
     {
         SharedFastPubSub::new(self)
+    }
+}
+
+#[cfg(feature = "websocket")]
+impl FastPubSub<WebSocketTransport> {
+    /// WS link quality from application `PING`/`PONG`.
+    pub async fn link_quality(
+        &self,
+    ) -> Result<crate::transport::LinkQualitySnapshot, PublishError> {
+        self.transport.link_quality().await.map_err(Into::into)
     }
 }

@@ -34,6 +34,8 @@ pub struct FastPubSubBuilder<T: Transport + Default + 'static> {
     meta_mode: MetaMode,
     #[cfg(feature = "websocket")]
     on_websocket_event: Option<mpsc::Sender<WebSocketEvent>>,
+    #[cfg(feature = "websocket")]
+    ping_interval_secs: Option<u8>,
     http_config: Option<HttpClientConfig>,
     _t: PhantomData<T>,
 }
@@ -51,6 +53,8 @@ impl<T: Transport + Default + 'static> FastPubSubBuilder<T> {
             meta_mode: MetaMode::default(),
             #[cfg(feature = "websocket")]
             on_websocket_event: None,
+            #[cfg(feature = "websocket")]
+            ping_interval_secs: None,
             http_config: None,
             _t: PhantomData,
         }
@@ -108,6 +112,13 @@ impl<T: Transport + Default + 'static> FastPubSubBuilder<T> {
         self
     }
 
+    /// WS application ping interval: 1, 3, or 5 seconds. `None` disables WS ping.
+    #[cfg(feature = "websocket")]
+    pub fn ping_interval_secs(mut self, secs: u8) -> Self {
+        self.ping_interval_secs = Some(secs);
+        self
+    }
+
     /// Connects the transport to the endpoint and returns a client (Tokio).
     pub async fn build(self) -> Result<FastPubSub<T>, BuildError> {
         let endpoint = self
@@ -124,6 +135,8 @@ impl<T: Transport + Default + 'static> FastPubSubBuilder<T> {
             access_token: self.at_token,
             #[cfg(feature = "websocket")]
             on_websocket_event: self.on_websocket_event,
+            #[cfg(feature = "websocket")]
+            ping_interval_secs: self.ping_interval_secs,
             #[cfg(any(feature = "websocket", feature = "rest"))]
             http_config: self.http_config,
         };

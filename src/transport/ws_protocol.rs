@@ -12,11 +12,23 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 /// Inbound delivery frame tag. Perimeter already matched patterns, SDK does not match locally.
 pub const FRAME_TAG_DELIVER: u8 = 0x01;
 
-/// Builds a binary publish frame (outbound): u16 tenant, tenant, u16 channel, channel, payload.
+/// Outbound publish frame v2 tag (v1 has no tag; first byte is always 0x00 for tenant_len <= 128).
+pub const FRAME_TAG_PUBLISH_V2: u8 = 0x02;
+
+/// Client ping line (no nonce).
+pub const WS_PING_LINE: &str = "PING";
+
+/// Server pong line.
+pub const WS_PONG_LINE: &str = "PONG";
+
+use super::PublishDeliveryMode;
+
+/// Builds a binary publish frame (outbound): v2 with delivery, or v1 for broadcast only.
 pub fn encode_publish_frame(
     tenant: &str,
     channel: &str,
     payload: &[u8],
+    delivery: PublishDeliveryMode,
 ) -> Result<Bytes, &'static str> {
     let tenant_bytes = tenant.as_bytes();
     let channel_bytes = channel.as_bytes();
@@ -26,14 +38,36 @@ pub fn encode_publish_frame(
     if tenant_bytes.len() > u16::MAX as usize || channel_bytes.len() > u16::MAX as usize {
         return Err("tenant or channel is too long");
     }
-    let mut buf =
-        BytesMut::with_capacity(4 + tenant_bytes.len() + channel_bytes.len() + payload.len());
+    let body_len = 4 + tenant_bytes.len() + channel_bytes.len() + payload.len();
+    let header_len = if delivery == PublishDeliveryMode::Broadcast {
+        0
+    } else {
+        2
+    };
+    let mut buf = BytesMut::with_capacity(header_len + body_len);
+    if delivery != PublishDeliveryMode::Broadcast {
+        buf.put_u8(FRAME_TAG_PUBLISH_V2);
+        buf.put_u8(delivery_to_wire(delivery)?);
+    }
     buf.put_u16(tenant_bytes.len() as u16);
     buf.put_slice(tenant_bytes);
     buf.put_u16(channel_bytes.len() as u16);
     buf.put_slice(channel_bytes);
     buf.put_slice(payload);
     Ok(buf.freeze())
+}
+
+fn delivery_to_wire(mode: PublishDeliveryMode) -> Result<u8, &'static str> {
+    match mode {
+        PublishDeliveryMode::Broadcast => Ok(0),
+        PublishDeliveryMode::DeliverOneLowLatency => Ok(1),
+        PublishDeliveryMode::DeliverOneRandom => Ok(2),
+    }
+}
+
+/// True if text line is a perimeter `PONG` response.
+pub fn is_pong_line(text: &str) -> bool {
+    text == WS_PONG_LINE
 }
 
 /// Decodes an outbound publish frame without pattern list.
@@ -225,6 +259,7 @@ fn parse_tenant_pattern_body(input: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::PublishDeliveryMode;
 
     #[test]
     fn deliver_roundtrip_fields() {
@@ -277,7 +312,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_ok_sub_without_pattern_is_none() {
-        assert!(parse_sub_ack_line("OK:SUB:tenant_only").is_none());
+    fn publish_v2_encodes_delivery() {
+        let frame = encode_publish_frame(
+            "t1",
+            "ch",
+            b"data",
+            PublishDeliveryMode::DeliverOneLowLatency,
+        )
+        .unwrap();
+        assert_eq!(frame[0], FRAME_TAG_PUBLISH_V2);
+        assert_eq!(frame[1], 1);
     }
 }

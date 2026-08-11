@@ -23,9 +23,10 @@ use super::ws_connection::{close_connection, open_connection, WsConnection, WsTa
 use super::ws_delivery::{
     handle_inbound_binary, handle_publish, handle_publish_until, InboundDeliveryResult,
 };
-use super::ws_protocol::{parse_err_line, parse_sub_ack_line, SubWireAck};
+use super::ws_protocol::{is_pong_line, parse_err_line, parse_sub_ack_line, WS_PING_LINE, SubWireAck};
+use super::link_quality::LinkQuality;
 use super::ws_subscriptions::{send_subscribe_line, SubscriptionEntry};
-use super::{WebSocketError, WebSocketEvent};
+use super::{PublishOptions, WebSocketError, WebSocketEvent};
 
 const OVERLAP_GRACE_SECS: u64 = 5;
 
@@ -38,6 +39,7 @@ pub(super) struct WsTaskState {
     next_id: u64,
     pub(super) pending_candidate_acks: HashSet<String>,
     overlap_dedup: OverlapDedup,
+    pub(super) link_quality: LinkQuality,
 }
 
 pub(super) struct WsTaskContext<'a> {
@@ -63,7 +65,27 @@ impl WsTaskState {
             next_id: 2,
             pending_candidate_acks: HashSet::new(),
             overlap_dedup: OverlapDedup::new(Duration::from_secs(6)),
+            link_quality: LinkQuality::default(),
         }
+    }
+
+    /// Sends WS `PING` if no ping is in flight.
+    pub(super) async fn maybe_send_ping(&mut self) -> Result<(), WebSocketError> {
+        if !self.link_quality.begin_ping() {
+            self.link_quality.expire_pending(Duration::from_secs(10));
+            return Ok(());
+        }
+        let Some(active) = self.active.as_mut() else {
+            return Ok(());
+        };
+        active
+            .write
+            .send(Message::Text(WS_PING_LINE.into()))
+            .await
+            .map_err(|e| WebSocketError::Transport {
+                operation: "ping".into(),
+                message: e.to_string(),
+            })
     }
 
     /// Publishes a message only through the active connection.
@@ -73,6 +95,7 @@ impl WsTaskState {
         tenant: &str,
         channel: &str,
         payload: Bytes,
+        options: &PublishOptions,
     ) -> Result<(), WebSocketError> {
         let Some(active) = self.active.as_mut() else {
             return Err(WebSocketError::Transport {
@@ -80,7 +103,7 @@ impl WsTaskState {
                 message: "transport is not connected".into(),
             });
         };
-        handle_publish(filters, &mut active.write, tenant, channel, payload)
+        handle_publish(filters, &mut active.write, tenant, channel, payload, options)
             .await
             .map_err(|e| WebSocketError::Transport {
                 operation: "publish".into(),
@@ -96,6 +119,7 @@ impl WsTaskState {
         tenant: &str,
         channel: &str,
         payload: Vec<u8>,
+        options: &PublishOptions,
     ) -> Result<(), WebSocketError> {
         let Some(active) = self.active.as_mut() else {
             return Err(WebSocketError::Transport {
@@ -110,6 +134,7 @@ impl WsTaskState {
             tenant,
             channel,
             payload,
+            options,
         )
         .await
         .map_err(|e| WebSocketError::Transport {
@@ -324,6 +349,16 @@ impl WsTaskState {
     }
 
     async fn handle_text(&mut self, id: u64, text: &str, ctx: WsTaskContext<'_>) {
+        if is_pong_line(text) {
+            if let Some(rtt_ms) = self.link_quality.record_pong() {
+                notify_event(
+                    ctx.events,
+                    WebSocketEvent::RttMeasured { rtt_ms },
+                );
+            }
+            return;
+        }
+
         if text == "RECONNECT" {
             if self.is_active(id) {
                 self.start_candidate_connect(
@@ -375,7 +410,14 @@ impl WsTaskState {
                 payload,
             } = message;
             if let Err(error) = self
-                .publish_until_filter_index(filters, filters.len(), &tenant, &channel, payload)
+                .publish_until_filter_index(
+                    filters,
+                    filters.len(),
+                    &tenant,
+                    &channel,
+                    payload,
+                    &PublishOptions::default(),
+                )
                 .await
             {
                 notify_error(events, error);

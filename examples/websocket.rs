@@ -123,6 +123,12 @@ fn print_websocket_event(event: WebSocketEvent) {
         WebSocketEvent::DuplicateDropped => {
             println!("websocket: duplicate message dropped during reconnect");
         }
+        WebSocketEvent::FilterNotice { level, message } => {
+            println!("websocket: filter notice [{level}] {message}");
+        }
+        WebSocketEvent::RttMeasured { rtt_ms } => {
+            println!("websocket: rtt {rtt_ms} ms");
+        }
     }
 }
 

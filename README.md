@@ -81,7 +81,7 @@ Important features:
 
 | Feature | Purpose |
 |---------|---------|
-| `rest` | REST discovery, `/ping`, `/v1/get-token`, `reqwest` |
+| `rest` | REST discovery, `/ping`, `/v1/get-token`, `/v1/refresh-token`, `/v1/revoke-token`, `reqwest` |
 | `websocket` | WebSocket transport with a Tokio background task |
 | `webtransport` | WebTransport API stub |
 | `access_token_json` | JSON builder for token requests |
@@ -259,6 +259,46 @@ client
     .publish_with_options("tenant_1", "public.chat.room1", b"hello", &options)
     .await?;
 ```
+
+Delivery modes:
+
+| `PublishDeliveryMode` | Wire | Behaviour |
+|-----------------------|------|-----------|
+| `Broadcast` | v1 frame (no tag) | All overlay target nodes and all local subscribers |
+| `DeliverOneLowLatency` | v2, mode `1` | One overlay node with lowest inter-node latency among nodes with subscribers; one random local subscribed connection on the edge |
+| `DeliverOneRandom` | v2, mode `2` | One random overlay node with subscribers; one random local subscribed connection |
+
+If no remote or local subscribers exist, deliver-one modes do nothing. Routing
+on the overlay requires an updated perimeter.
+
+## WS Link Quality
+
+HTTP `GET /ping` during `resolve_edge()` measures which edge to connect to.
+After the WebSocket is open, optional application `PING`/`PONG` measures RTT on
+the active connection. The perimeter only answers `PONG`; it does not track
+client RTT.
+
+```rust
+use fastpubsub_sdk::client::create_web_socket;
+use fastpubsub_sdk::transport::WebSocketEvent;
+
+let client = create_web_socket("overlay_name", "AT_token")
+    .ping_interval_secs(3)
+    .build()
+    .await?;
+
+let quality = client.link_quality().await?;
+println!("last={:?} median={:?}", quality.last_rtt_ms, quality.median_rtt_ms);
+
+// In the event loop:
+match event {
+    WebSocketEvent::RttMeasured { rtt_ms } => println!("rtt={rtt_ms} ms"),
+    _ => {}
+}
+```
+
+Allowed intervals are `1`, `3`, and `5` seconds. Omit `ping_interval_secs` to
+disable WS ping.
 
 In v0.1, success means the SDK accepted the payload and passed it to the
 transport. It does not mean that every remote subscriber already received it.
@@ -502,6 +542,8 @@ REST is used before transport connect.
 |--------|------|------|---------|
 | `GET` | `/ping` | none | Measure edge latency |
 | `POST` | `/v1/get-token` | `Bearer` master token | Create an access token |
+| `PUT` | `/v1/refresh-token` | `Bearer` master token | Extend AT expiry (`token_id` + `expires_at`) |
+| `DELETE` | `/v1/revoke-token` | `Bearer` master token | Revoke a full `AT_...` |
 
 Common helper types:
 
@@ -510,6 +552,9 @@ Common helper types:
 | `open()` | Starts a `FastPubSubSession` for an overlay |
 | `FastPubSubSession::resolve_edge()` | Finds and selects an edge |
 | `CreateAccessTokenBuilder` | Builds the access token request |
+| `refresh_access_token` / `refresh_access_token_from_at` | Extends AT TTL (master token) |
+| `revoke_access_token` | Revokes AT (master token) |
+| `access_token_id` / `parse_access_token` | Parses `AT_{id}_{secret}` |
 | `TenantGrant` | Defines tenant publish and subscribe rights |
 | `ping_many()` / `ping_fastest()` | Measures edge latency |
 | `HttpClientConfig` | Proxy, custom CA, and HTTP settings |
@@ -571,7 +616,13 @@ Examples are in [`examples/`](examples/). Run commands from `rust-sdk/`.
 
 ## Limits In v0.1
 
-- `PublishDeliveryMode` exists in the API, but is not encoded on the wire yet.
+- `PublishDeliveryMode` is encoded in publish frame v2 (`0x02` tag +
+  `delivery_mode` byte). `Broadcast` keeps the legacy v1 frame.
+- WS application `PING`/`PONG` measures RTT in the SDK
+  (`ping_interval_secs(1|3|5)`, `link_quality()`, `RttMeasured`). HTTP `/ping`
+  is only for edge selection.
+- `DeliverOneLowLatency` uses overlay latency between nodes; on the local edge
+  it picks one random subscribed connection.
 - WebTransport has no real network task yet.
 - Delivery success means local SDK/transport acceptance, not confirmed delivery
   to every remote subscriber.

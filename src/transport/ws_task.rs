@@ -51,6 +51,10 @@ pub enum WsCommand {
     },
     /// Stop the task.
     Shutdown,
+    /// Returns current link quality snapshot.
+    GetLinkQuality {
+        reply: oneshot::Sender<super::LinkQualitySnapshot>,
+    },
 }
 
 /// Starts the task. `ready` reports handshake success or error.
@@ -62,6 +66,7 @@ pub fn spawn_ws_task(
     filter_timer_mode: FilterTimerMode,
     meta_mode: MetaMode,
     events: Option<mpsc::Sender<WebSocketEvent>>,
+    ping_interval_secs: Option<u8>,
     mut cmd_rx: mpsc::Receiver<WsCommand>,
     ready: oneshot::Sender<Result<(), TransportError>>,
 ) -> tokio::task::JoinHandle<()> {
@@ -94,8 +99,28 @@ pub fn spawn_ws_task(
             time::interval_at(time::Instant::now() + timer_interval, timer_interval);
         filter_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
+        let ping_interval = ping_interval_secs
+            .filter(|s| matches!(s, 1 | 3 | 5))
+            .map(|s| time::Duration::from_secs(u64::from(s)));
+        let mut ping_timer = ping_interval.map(|d| {
+            let mut t = time::interval(d);
+            t.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            t
+        });
+
         loop {
             tokio::select! {
+                _ = async {
+                    if let Some(ref mut t) = ping_timer {
+                        t.tick().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
+                    if let Err(e) = state.maybe_send_ping().await {
+                        notify_error(&events, e);
+                    }
+                }
                 _ = filter_timer.tick() => {
                     let messages = notify_filter_timer(
                         filters.as_ref().as_slice(),
@@ -122,9 +147,8 @@ pub fn spawn_ws_task(
                             payload,
                             options,
                         }) => {
-                            let _ = options;
                             if let Err(e) = state
-                                .publish(&filters, &tenant, &channel, payload)
+                                .publish(&filters, &tenant, &channel, payload, &options)
                                 .await
                             {
                                 notify_error(&events, e);
@@ -155,6 +179,9 @@ pub fn spawn_ws_task(
                                     },
                                 );
                             }
+                        }
+                        Some(WsCommand::GetLinkQuality { reply }) => {
+                            let _ = reply.send(state.link_quality.snapshot());
                         }
                     }
                 }
@@ -228,7 +255,7 @@ async fn publish_timer_message(
         payload,
     } = message;
     if let Err(error) = state
-        .publish_until_filter_index(filters, end_index, &tenant, &channel, payload)
+        .publish_until_filter_index(filters, end_index, &tenant, &channel, payload, &PublishOptions::default())
         .await
     {
         notify_error(events, error);

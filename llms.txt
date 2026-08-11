@@ -1,0 +1,163 @@
+# FastPubSub Rust SDK
+
+> Rust client library for FastPubSubNetwork contract v0.1 — realtime publish/subscribe over WebSocket.
+
+Crate: [fastpubsub-sdk on crates.io](https://crates.io/crates/fastpubsub-sdk)
+Repository: [github.com/fastpubsub/rust-sdk](https://github.com/fastpubsub/rust-sdk)
+Full guide: [README.md](README.md)
+Developer docs: [doc.fastpubsub.com](https://doc.fastpubsub.com)
+Product context: [fastpubsub.com/llms.txt](https://www.fastpubsub.com/llms.txt)
+
+## What This SDK Is For
+
+Use this crate when a Rust service, worker, or desktop tool needs to:
+
+- connect to a FastPubSub edge over WebSocket;
+- create, refresh, and revoke short-lived access tokens from a master token;
+- publish binary payloads to `tenant + channel`;
+- subscribe to channel patterns like `public.#`;
+- apply route filters (compression, encryption, fragmentation, batching, delta, latest-only, send-rate, bandwidth).
+
+This SDK talks to the managed FastPubSub network. It is not a self-hosted broker client.
+
+## What This SDK Is Not
+
+- Not a durable queue, stream processor, or Kafka/NATS/RabbitMQ replacement.
+- Not for message replay, consumer groups, or guaranteed persistence.
+- WebTransport API exists but the network task is still a stub in v0.1.
+- `publish` success means local SDK/transport acceptance, not confirmed delivery to every remote subscriber.
+
+## Key Concepts
+
+| Term | Meaning |
+|------|---------|
+| `overlay` | Environment name, e.g. `globaltest` for dev/test |
+| `tenant` | Namespace inside an access token; rights are per tenant |
+| `channel` | Concrete publish route, e.g. `public.chat.room1` — no wildcards in publish |
+| `channel_pattern` | Subscription pattern, e.g. `public.#` |
+| `payload` | Binary data; SDK does not force JSON or protobuf |
+| `SdkMessage` | What subscribers receive after inbound filters |
+
+## Recommended Flow
+
+```text
+open(overlay)
+  -> resolve_edge()
+  -> create_access_token()
+  -> session.web_socket(access_token)?.build().await?
+  -> publish / subscribe
+```
+
+`resolve_edge()` discovers bootstrap candidates, probes `GET {api_base}/ping` in parallel, and selects the fastest edge.
+
+## Cargo Dependency
+
+```toml
+[dependencies]
+fastpubsub_sdk = { package = "fastpubsub-sdk", version = "0.3" }
+```
+
+Import path is `fastpubsub_sdk` (crate renamed in `Cargo.toml`).
+
+Default features: `rest`, `websocket`, `access_token_json`, `debug_log_format_json`.
+
+Transport only:
+
+```toml
+fastpubsub_sdk = { package = "fastpubsub-sdk", version = "0.3", default-features = false, features = ["websocket"] }
+```
+
+## Minimal Example
+
+```rust
+use fastpubsub_sdk::client::{open, FastPubSub};
+use fastpubsub_sdk::transport::{SubscribeOptions, WebSocketTransport};
+use fastpubsub_sdk::{CreateAccessTokenBuilder, TenantGrant};
+
+let mut session = open("globaltest");
+session.resolve_edge().await?;
+
+let access_token = CreateAccessTokenBuilder::new()
+    .created_by("my-app")
+    .expires_at_input("+1h")?
+    .tenant_grant(
+        TenantGrant::new(vec!["tenant_1".to_string()])
+            .allow_pub(vec!["public.#".to_string()])
+            .allow_sub(vec!["public.#".to_string()]),
+    )
+    .create_with_config(session.api_base()?, &master_token, session.http_config())
+    .await?;
+
+let mut client: FastPubSub<WebSocketTransport> =
+    session.web_socket(access_token)?.build().await?;
+
+let mut rx = client
+    .subscribe("tenant_1", "public.#", &SubscribeOptions::default())
+    .await?;
+
+client.publish("tenant_1", "public.demo", b"hello").await?;
+```
+
+Runnable examples: `examples/websocket.rs`, `examples/latest_receiver.rs`, `examples/latest_state_sync.rs`, `examples/chat_broadcast.rs`.
+
+## Publish Delivery Modes
+
+Use `publish_with_options` for explicit delivery:
+
+| `PublishDeliveryMode` | Wire | Behaviour |
+|-----------------------|------|-----------|
+| `Broadcast` | v1 frame | All overlay nodes and all local subscribers |
+| `DeliverOneLowLatency` | v2, mode `1` | One lowest-latency overlay node; one random local subscriber on edge |
+| `DeliverOneRandom` | v2, mode `2` | One random overlay node; one random local subscriber |
+
+`publish()` without options sends broadcast (legacy v1 frame). Deliver-one modes do nothing when no subscribers exist.
+
+## Filters — Rules For Users And AI
+
+- Register the same filter list on sender and receiver for the same `tenant + channel` prefix.
+- Inbound filters run in registration order; outbound filters run in reverse order.
+- Use wider prefixes only when all child channels need the same filter, e.g. `public.` covers `public.chat` and `public.state`.
+- Timer-based filters need `filter_timer_mode` on the builder.
+
+Available filters: `CompressedFilter`, `EncryptionFilter`, `FragmentFilter`, `ChannelBatchFilter`, `Delta16Filter`, `Delta32Filter`, `Delta64Filter`, `SendRateFilter`, `LatestOnlyFilter`, `BandwidthLimiterFilter`, `DebugLogFilter`, `DummyFilter`.
+
+`FragmentFilter` subscriptions must include the main channel and control channel, e.g. `files.photo.#`.
+
+## WS Link Quality
+
+- HTTP `GET /ping` during `resolve_edge()` selects the edge.
+- Optional application `PING`/`PONG` on the open WebSocket measures RTT (`ping_interval_secs(1|3|5)`, `link_quality()`, `RttMeasured` event).
+
+## Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `FPS_MASTER_TOKEN` | Master token for `/v1/get-token` |
+| `FPS_ACCESS_TOKEN` | Access token for direct endpoint examples |
+| `FPS_WS_ENDPOINT` | WebSocket endpoint for direct endpoint examples |
+| `HTTP_PROXY` / `HTTPS_PROXY` | Proxy URL |
+| `FPS_EXTRA_CA_CERT` | Extra CA file paths, comma-separated |
+
+## REST Helpers (before transport connect)
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `GET` | `/ping` | none | Measure edge latency |
+| `POST` | `/v1/get-token` | Bearer master token | Create access token |
+| `PUT` | `/v1/refresh-token` | Bearer master token | Extend AT expiry |
+| `DELETE` | `/v1/revoke-token` | Bearer master token | Revoke access token |
+
+Helpers: `refresh_access_token`, `refresh_access_token_from_at`, `revoke_access_token`, `access_token_id`, `parse_access_token`.
+
+## Limits In v0.1
+
+- Publish frame v2 (`0x02` tag) encodes delivery mode; broadcast keeps legacy v1.
+- WebTransport has no real network task yet.
+- Delivery success is local SDK acceptance, not end-to-end confirmation.
+
+## More Documentation
+
+- [README.md](README.md): full API guide, filters, helpers, proxy/CA setup
+- [README.websocket.md](README.websocket.md): WebSocket protocol details
+- [CHANGELOG.md](CHANGELOG.md): release notes
+- [doc.fastpubsub.com](https://doc.fastpubsub.com): product and protocol documentation

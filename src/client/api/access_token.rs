@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Project: https://fastpubsub.com
 
-//! `POST /v1/get-token` creates an access token (`AT_...`).
+//! Create, refresh, and revoke access tokens via edge REST (`AT_...`).
+//!
+//! - `POST /v1/get-token` — create
+//! - `PUT /v1/refresh-token` — extend TTL (`expires_at` only)
+//! - `DELETE /v1/revoke-token` — revoke
+//!
+//! All three calls require a master token in `Authorization: Bearer ...`.
 
 use std::time::Duration;
 
@@ -443,6 +449,259 @@ pub async fn create_access_token_with_config(
         });
     }
     Ok(parsed.token)
+}
+
+/// Error while parsing an access token string (`AT_...`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccessTokenParseError {
+    /// String is not `AT_{token_id}_{secret}`.
+    InvalidFormat,
+}
+
+impl std::fmt::Display for AccessTokenParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AccessTokenParseError::InvalidFormat => {
+                write!(f, "expected format AT_{{token_id}}_{{secret}}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AccessTokenParseError {}
+
+/// Parses a full AT into `(token_id, secret)`.
+///
+/// For myself: same layout as edge `parse_token` — prefix `AT_`, first `_` splits id/secret.
+pub fn parse_access_token(full_token: &str) -> Result<(&str, &str), AccessTokenParseError> {
+    let rest = full_token
+        .strip_prefix("AT_")
+        .ok_or(AccessTokenParseError::InvalidFormat)?;
+    let underscore_pos = rest
+        .find('_')
+        .ok_or(AccessTokenParseError::InvalidFormat)?;
+    let token_id = &rest[..underscore_pos];
+    let secret = &rest[underscore_pos + 1..];
+    if token_id.is_empty() || secret.is_empty() {
+        return Err(AccessTokenParseError::InvalidFormat);
+    }
+    Ok((token_id, secret))
+}
+
+/// Extracts `token_id` from a full AT (needed for `PUT /v1/refresh-token`).
+pub fn access_token_id(full_token: &str) -> Result<&str, AccessTokenParseError> {
+    parse_access_token(full_token).map(|(id, _)| id)
+}
+
+/// Body for `PUT /v1/refresh-token`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RefreshAccessTokenRequest {
+    /// Token id only (no secret), hex.
+    pub token_id: String,
+    /// New `expires_at` (RFC3339 UTC). Max 24 hours from server "now".
+    pub expires_at: String,
+}
+
+/// Response from `PUT /v1/refresh-token`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct RefreshAccessTokenResponse {
+    /// Result message from the API.
+    pub message: String,
+    /// New expiration time.
+    pub new_expires_at: String,
+}
+
+/// Body for `DELETE /v1/revoke-token`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RevokeAccessTokenRequest {
+    /// Full AT `AT_{id}_{secret}`.
+    pub token: String,
+}
+
+/// Response from `DELETE /v1/revoke-token`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct RevokeAccessTokenResponse {
+    /// Result message from the API.
+    pub message: String,
+}
+
+/// `PUT /v1/refresh-token` — extends TTL of an existing AT (master token required).
+///
+/// * `token_id` — id from `AT_{token_id}_{secret}` (see [`access_token_id`])
+/// * `expires_at` — ready RFC3339 string (see [`parse_expires_at_input_clamp`])
+///
+/// For myself: does not change IP masks or ACL; expired tokens cannot be refreshed.
+pub async fn refresh_access_token(
+    api_base: &str,
+    master_token: &str,
+    token_id: &str,
+    expires_at: &str,
+) -> Result<RefreshAccessTokenResponse, ApiError> {
+    refresh_access_token_with_config(
+        api_base,
+        master_token,
+        token_id,
+        expires_at,
+        &HttpClientConfig::default(),
+    )
+    .await
+}
+
+/// Same as [`refresh_access_token`], with HTTP client settings.
+pub async fn refresh_access_token_with_config(
+    api_base: &str,
+    master_token: &str,
+    token_id: &str,
+    expires_at: &str,
+    config: &HttpClientConfig,
+) -> Result<RefreshAccessTokenResponse, ApiError> {
+    if token_id.trim().is_empty() {
+        return Err(ApiError::UnexpectedBody {
+            body: "token_id is empty".to_string(),
+        });
+    }
+    if expires_at.trim().is_empty() {
+        return Err(ApiError::UnexpectedBody {
+            body: "expires_at is empty".to_string(),
+        });
+    }
+    let url = api_url(api_base, "v1/refresh-token");
+    let client = build_http_client(config, TOKEN_TIMEOUT)?;
+    let request = RefreshAccessTokenRequest {
+        token_id: token_id.trim().to_string(),
+        expires_at: expires_at.trim().to_string(),
+    };
+    let response = client
+        .put(&url)
+        .header("Authorization", format!("Bearer {master_token}"))
+        .json(&request)
+        .send()
+        .await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(ApiError::UnexpectedStatus {
+            status: status.as_u16(),
+            body,
+        });
+    }
+    let parsed: RefreshAccessTokenResponse = response.json().await?;
+    if parsed.new_expires_at.is_empty() {
+        return Err(ApiError::UnexpectedBody {
+            body: "empty new_expires_at".to_string(),
+        });
+    }
+    Ok(parsed)
+}
+
+/// Extends TTL from a full AT: extracts `token_id` and calls refresh.
+pub async fn refresh_access_token_from_at(
+    api_base: &str,
+    master_token: &str,
+    full_token: &str,
+    expires_at: &str,
+) -> Result<RefreshAccessTokenResponse, ApiError> {
+    refresh_access_token_from_at_with_config(
+        api_base,
+        master_token,
+        full_token,
+        expires_at,
+        &HttpClientConfig::default(),
+    )
+    .await
+}
+
+/// Same as [`refresh_access_token_from_at`], with HTTP client settings.
+pub async fn refresh_access_token_from_at_with_config(
+    api_base: &str,
+    master_token: &str,
+    full_token: &str,
+    expires_at: &str,
+    config: &HttpClientConfig,
+) -> Result<RefreshAccessTokenResponse, ApiError> {
+    let token_id = access_token_id(full_token).map_err(|e| ApiError::UnexpectedBody {
+        body: e.to_string(),
+    })?;
+    refresh_access_token_with_config(api_base, master_token, token_id, expires_at, config).await
+}
+
+/// `DELETE /v1/revoke-token` — revokes an AT (master token required).
+///
+/// * `full_token` — full `AT_{id}_{secret}`
+pub async fn revoke_access_token(
+    api_base: &str,
+    master_token: &str,
+    full_token: &str,
+) -> Result<RevokeAccessTokenResponse, ApiError> {
+    revoke_access_token_with_config(
+        api_base,
+        master_token,
+        full_token,
+        &HttpClientConfig::default(),
+    )
+    .await
+}
+
+/// Same as [`revoke_access_token`], with HTTP client settings.
+pub async fn revoke_access_token_with_config(
+    api_base: &str,
+    master_token: &str,
+    full_token: &str,
+    config: &HttpClientConfig,
+) -> Result<RevokeAccessTokenResponse, ApiError> {
+    if full_token.trim().is_empty() {
+        return Err(ApiError::UnexpectedBody {
+            body: "token is empty".to_string(),
+        });
+    }
+    let url = api_url(api_base, "v1/revoke-token");
+    let client = build_http_client(config, TOKEN_TIMEOUT)?;
+    let request = RevokeAccessTokenRequest {
+        token: full_token.trim().to_string(),
+    };
+    let response = client
+        .delete(&url)
+        .header("Authorization", format!("Bearer {master_token}"))
+        .json(&request)
+        .send()
+        .await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(ApiError::UnexpectedStatus {
+            status: status.as_u16(),
+            body,
+        });
+    }
+    let parsed: RevokeAccessTokenResponse = response.json().await?;
+    Ok(parsed)
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn parse_access_token_ok() {
+        let (id, secret) =
+            parse_access_token("AT_aabbccddeeff00112233445566778899_11223344556677889900aabbccddeeff")
+                .expect("ok");
+        assert_eq!(id, "aabbccddeeff00112233445566778899");
+        assert_eq!(secret, "11223344556677889900aabbccddeeff");
+        assert_eq!(
+            access_token_id("AT_aabbccddeeff00112233445566778899_11223344556677889900aabbccddeeff")
+                .expect("id"),
+            "aabbccddeeff00112233445566778899"
+        );
+    }
+
+    #[test]
+    fn parse_access_token_rejects_bad() {
+        assert!(parse_access_token("MT_x_y").is_err());
+        assert!(parse_access_token("AT_onlyid").is_err());
+        assert!(parse_access_token("AT__secret").is_err());
+        assert!(parse_access_token("AT_id_").is_err());
+    }
 }
 
 #[cfg(all(test, feature = "access_token_json"))]

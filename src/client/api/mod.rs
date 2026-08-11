@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Project: https://fastpubsub.com
 
-//! REST control plane: ping, access token (feature `rest`).
+//! REST control plane: ping, access token create/refresh/revoke (feature `rest`).
 
 mod access_token;
 mod expires_at;
@@ -11,9 +11,13 @@ mod http_client;
 mod ping;
 
 pub use access_token::{
-    create_access_token, create_access_token_with_config, AccessTokenBuildError,
-    AccessTokenJsonError, CreateAccessTokenBuilder, CreateAccessTokenRequest,
-    CreateAccessTokenResponse, TenantGrant, TokenRights,
+    access_token_id, create_access_token, create_access_token_with_config, parse_access_token,
+    refresh_access_token, refresh_access_token_from_at, refresh_access_token_from_at_with_config,
+    refresh_access_token_with_config, revoke_access_token, revoke_access_token_with_config,
+    AccessTokenBuildError, AccessTokenJsonError, AccessTokenParseError, CreateAccessTokenBuilder,
+    CreateAccessTokenRequest, CreateAccessTokenResponse, RefreshAccessTokenRequest,
+    RefreshAccessTokenResponse, RevokeAccessTokenRequest, RevokeAccessTokenResponse, TenantGrant,
+    TokenRights,
 };
 pub use expires_at::{
     expires_at_after_seconds, expires_at_max_ttl, format_expires_at_rfc3339_z,

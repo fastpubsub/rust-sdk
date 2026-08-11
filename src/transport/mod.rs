@@ -13,6 +13,8 @@ use async_trait::async_trait;
 mod route_pattern;
 
 #[cfg(feature = "websocket")]
+mod link_quality;
+#[cfg(feature = "websocket")]
 mod overlap_dedup;
 #[cfg(feature = "websocket")]
 mod websocket;
@@ -43,9 +45,12 @@ pub use bytes::Bytes;
 pub use route_pattern::make_route_subscription_key as make_subscription_key;
 pub use route_pattern::{make_route_subscription_key, validate_channel_pattern};
 #[cfg(feature = "websocket")]
+pub use link_quality::{LinkQuality, LinkQualitySnapshot};
+#[cfg(feature = "websocket")]
 pub use ws_protocol::{
-    format_ok_subscribe, format_ok_unsubscribe, parse_sub_ack_line, InboundDeliverFrame,
-    SubWireAck, FRAME_TAG_DELIVER,
+    format_ok_subscribe, format_ok_unsubscribe, is_pong_line, parse_sub_ack_line,
+    InboundDeliverFrame, SubWireAck, FRAME_TAG_DELIVER, FRAME_TAG_PUBLISH_V2, WS_PING_LINE,
+    WS_PONG_LINE,
 };
 
 #[cfg(feature = "websocket")]
@@ -92,6 +97,11 @@ pub enum WebSocketEvent {
     },
     /// Duplicate inbound frame was dropped during the overlap window.
     DuplicateDropped,
+    /// Measured WS round-trip after `PING`/`PONG`.
+    RttMeasured {
+        /// RTT in milliseconds.
+        rtt_ms: u32,
+    },
 }
 
 /// Typed WebSocket transport error.
@@ -165,6 +175,9 @@ pub struct TransportConnectParams {
     /// Squid proxy (REST + CONNECT for WSS), user/password in [`HttpClientConfig`].
     #[cfg(any(feature = "websocket", feature = "rest"))]
     pub http_config: Option<HttpClientConfig>,
+    /// WS application ping interval: 1, 3, or 5 seconds. None disables ping.
+    #[cfg(feature = "websocket")]
+    pub ping_interval_secs: Option<u8>,
 }
 
 /// Options for [`Transport::subscribe`].

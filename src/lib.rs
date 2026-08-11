@@ -9,7 +9,7 @@
 //!
 //! ## Features
 //!
-//! - `rest` (**enabled by default**) - discovery, `get-token`, ping, `reqwest`.
+//! - `rest` (**enabled by default**) - discovery, `get-token` / `refresh-token` / `revoke-token`, ping, `reqwest`.
 //! - `websocket` - WebSocket transport, `tokio-tungstenite`.
 //! - `webtransport` - WebTransport (stub for now).
 //!
@@ -40,14 +40,18 @@ pub use metadata::{
 
 #[cfg(feature = "rest")]
 pub use client::{
-    create_access_token, create_access_token_with_config, default_bootstrap_url,
+    access_token_id, create_access_token, create_access_token_with_config, default_bootstrap_url,
     expires_at_after_seconds, expires_at_max_ttl, format_expires_at_rfc3339_z, open,
-    parse_expires_at_input, parse_expires_at_input_clamp, ping, ping_fastest,
-    ping_fastest_with_config, ping_many, ping_with_config, utc_now_with_margin,
-    AccessTokenBuildError, AccessTokenJsonError, ApiError, CreateAccessTokenBuilder,
-    CreateAccessTokenRequest, CreateAccessTokenResponse, DiscoveryError, EdgeCandidate,
-    ExpiresAtParseError, FastPubSubSession, PingManyResult, PingTiming, SelectedEdge, TenantGrant,
-    TokenRights, DEFAULT_NOW_MARGIN_SECS, MAX_TOKEN_TTL_HOURS, MAX_TOKEN_TTL_MARGIN_SECS,
+    parse_access_token, parse_expires_at_input, parse_expires_at_input_clamp, ping, ping_fastest,
+    ping_fastest_with_config, ping_many, ping_with_config, refresh_access_token,
+    refresh_access_token_from_at, refresh_access_token_from_at_with_config,
+    refresh_access_token_with_config, revoke_access_token, revoke_access_token_with_config,
+    utc_now_with_margin, AccessTokenBuildError, AccessTokenJsonError, AccessTokenParseError,
+    ApiError, CreateAccessTokenBuilder, CreateAccessTokenRequest, CreateAccessTokenResponse,
+    DiscoveryError, EdgeCandidate, ExpiresAtParseError, FastPubSubSession, PingManyResult,
+    PingTiming, RefreshAccessTokenRequest, RefreshAccessTokenResponse, RevokeAccessTokenRequest,
+    RevokeAccessTokenResponse, SelectedEdge, TenantGrant, TokenRights, DEFAULT_NOW_MARGIN_SECS,
+    MAX_TOKEN_TTL_HOURS, MAX_TOKEN_TTL_MARGIN_SECS,
 };
 
 #[cfg(any(feature = "websocket", feature = "webtransport"))]

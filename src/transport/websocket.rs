@@ -77,6 +77,7 @@ impl Transport for WebSocketTransport {
             params.filter_timer_mode,
             params.meta_mode,
             params.on_websocket_event,
+            params.ping_interval_secs,
             cmd_rx,
             ready_tx,
         );
@@ -144,5 +145,19 @@ impl Transport for WebSocketTransport {
         .await
         .map_err(|_| TransportError::NotConnected)?;
         Ok(())
+    }
+}
+
+impl WebSocketTransport {
+    /// Returns WS link quality snapshot (PING/PONG RTT).
+    pub async fn link_quality(&self) -> Result<crate::transport::LinkQualitySnapshot, TransportError> {
+        let tx = self.cmd_tx.as_ref().ok_or(TransportError::NotConnected)?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(WsCommand::GetLinkQuality { reply: reply_tx })
+            .await
+            .map_err(|_| TransportError::NotConnected)?;
+        reply_rx
+            .await
+            .map_err(|_| TransportError::Other("ws task did not answer link_quality".into()))
     }
 }
